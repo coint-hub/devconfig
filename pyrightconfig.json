@@ -5,4 +5,5 @@
   "reportUnusedImport": "warning",
   "reportUnusedFunction": "warning",
   "reportUnusedCallResult": "none",
+  "extraPaths": ["devconfig/src"],
 }

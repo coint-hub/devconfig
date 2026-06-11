@@ -3,7 +3,7 @@ name = "devconfig-project"
 version = "0.1.0"
 readme = "README.md"
 requires-python = "==3.14.*"
-dependencies = []
+dependencies = [ "devconfig" ]
 
 [tool.uv]
 package = false
@@ -11,3 +11,6 @@ python-downloads = "manual"
 
 [tool.uv.workspace]
 members = [ "devconfig" ]
+
+[tool.uv.sources]
+devconfig = { workspace = true }

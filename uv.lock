@@ -38,7 +38,7 @@ wheels = [
 [[package]]
 name = "devconfig"
 version = "0.1.0"
-source = { virtual = "devconfig" }
+source = { editable = "devconfig" }
 dependencies = [
     { name = "pydantic" },
     { name = "typer" },
@@ -54,6 +54,12 @@ requires-dist = [
 name = "devconfig-project"
 version = "0.1.0"
 source = { virtual = "." }
+dependencies = [
+    { name = "devconfig" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "devconfig", editable = "devconfig" }]
 
 [[package]]
 name = "markdown-it-py"
