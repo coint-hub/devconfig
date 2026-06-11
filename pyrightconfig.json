@@ -1,0 +1,8 @@
+{
+  "typeCheckingMode": "all",
+  "reportUnusedParameter": "warning",
+  "reportUnusedVariable": "warning",
+  "reportUnusedImport": "warning",
+  "reportUnusedFunction": "warning",
+  "reportUnusedCallResult": "none",
+}

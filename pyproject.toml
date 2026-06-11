@@ -1,0 +1,13 @@
+[project]
+name = "devconfig-project"
+version = "0.1.0"
+readme = "README.md"
+requires-python = "==3.14.*"
+dependencies = []
+
+[tool.uv]
+package = false
+python-downloads = "manual"
+
+[tool.uv.workspace]
+members = [ "devconfig" ]

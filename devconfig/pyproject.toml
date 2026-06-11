@@ -1,0 +1,9 @@
+[project]
+name = "devconfig"
+version = "0.1.0"
+readme = "README.md"
+requires-python = "==3.14.*"
+dependencies = [
+ "pydantic>=2.13.4",
+ "typer>=0.26.7",
+]
