@@ -1,17 +1,21 @@
 import json
 import os
-from enum import StrEnum, auto, unique
 from pathlib import Path
+from typing import final
 
 import typer
 from pydantic import BaseModel
+
+from devconfig.model import DevConfigModel, DevConfigServiceModel, DevConfigServiceType
 
 
 def main() -> None:
     jar = Jar.load(Config.jar_path)
 
-    devconfig = DevConfig.load(Config.devconfig_path)
-    values = devconfig.render(jar, Config.work_path.name)
+    devconfig = DevConfig(
+        DevConfigModel.load(Config.devconfig_path), Config.work_path.name
+    )
+    values = devconfig.render(jar)
     write_envrc(Config.envrc_path, values)
 
     jar.save(Config.jar_path)
@@ -51,75 +55,67 @@ class Jar(BaseModel):
         return port
 
 
-class DevConfig(BaseModel):
-    name: str
-    services: list[DevConfigService]
+@final
+class DevConfig:
+    def __init__(self, model: DevConfigModel, work_name: str) -> None:
+        self.model = model
+        self.work_name = work_name
+        self.services = [DevConfigService(model=s, parent=self) for s in model.services]
 
-    @staticmethod
-    def load(json_path: Path) -> DevConfig:
-        with open(json_path, "r") as f:
-            return DevConfig.model_validate(json.load(f))
-
-    def render(self, jar: Jar, work_name: str) -> dict[str, str]:
+    def render(self, jar: Jar) -> dict[str, str]:
         values: dict[str, str] = {}
-        values[_key(self.name, "work_name")] = work_name
+        values[_key(self.model.name, "work_name")] = self.work_name
         for service in self.services:
-            service_values = service.render(
-                jar=jar, config_name=self.name, work_name=work_name
-            )
+            service_values = service.render(jar=jar)
             for key, value in service_values:
                 assert key not in values, f"Duplicate environment variable: {key=}"
                 values[key] = value
         return values
 
 
-class DevConfigService(BaseModel):
-    name: str
-    type: DevConfigServiceType | None = None
-    path: Path | None = None
+@final
+class DevConfigService:
+    def __init__(self, *, model: DevConfigServiceModel, parent: DevConfig) -> None:
+        self.model = model
+        self.parent = parent
 
-    def render(
-        self, *, jar: Jar, config_name: str, work_name: str
-    ) -> list[tuple[str, str]]:
+    def render(self, *, jar: Jar) -> list[tuple[str, str]]:
         values: list[tuple[str, str]] = []
+        config_name = self.parent.model.name
 
-        port_key = _key(config_name, self.name, "port")
+        port_key = _key(config_name, self.model.name, "port")
         port = jar.get_or_assign_port(
-            config_name=config_name, work_name=work_name, key=port_key
+            config_name=config_name, work_name=self.parent.work_name, key=port_key
         )
         values.append((port_key, str(port)))
 
         # spring config
-        match self.type:
+        match self.model.type:
             case DevConfigServiceType.SPRING:
                 self._write_spring_config(port)
             case DevConfigServiceType.WEB | None:
                 pass
         # url
-        match self.type:
+        match self.model.type:
             case DevConfigServiceType.SPRING | DevConfigServiceType.WEB:
-                url_key = _key(config_name, self.name, "url")
+                url_key = _key(config_name, self.model.name, "url")
                 url = f"http://127.0.0.1:{port}"
                 values.append((url_key, url))
-                print(f"{self.name}: http://127.0.0.1:{port}")
+                print(f"{self.model.name}: http://127.0.0.1:{port}")
             case None:
                 pass
 
         return values
 
     def _write_spring_config(self, port: int) -> None:
-        assert self.path is not None, (
-            f"Path is required for SPRING service: {self.name=}"
+        assert self.model.path is not None, (
+            f"Path is required for SPRING service: {self.model.name=}"
         )
-        yaml_path = self.path / "src" / "main" / "resources" / "application-default.yml"
+        yaml_path = (
+            self.model.path / "src" / "main" / "resources" / "application-default.yml"
+        )
         with open(yaml_path, "w") as f:
             f.write(f"server.port: {port}\n")
-
-
-@unique
-class DevConfigServiceType(StrEnum):
-    SPRING = auto()
-    WEB = auto()
 
 
 def write_envrc(envrc_path: Path, values: dict[str, str]) -> None:
