@@ -6,73 +6,16 @@ import pytest
 from devconfig.bin.main import (
     Config,
     DevConfig,
-    Jar,
     _key,  # pyright: ignore[reportPrivateUsage]
     main,
     write_envrc,
 )
-from devconfig.model import DevConfigModel
+from devconfig.model import DevConfigModel, Jar
 
 
 def test_key_joins_and_uppercases() -> None:
     assert _key("demo", "api", "port") == "DEMO_API_PORT"
     assert _key("demo") == "DEMO"
-
-
-class TestJar:
-    def test_assigns_ports_sequentially_from_30000(self) -> None:
-        jar = Jar()
-
-        first = jar.get_or_assign_port(config_name="demo", work_name="main", key="A")
-        second = jar.get_or_assign_port(config_name="demo", work_name="main", key="B")
-
-        assert first == 30000
-        assert second == 30001
-
-    def test_same_key_returns_same_port(self) -> None:
-        jar = Jar()
-
-        first = jar.get_or_assign_port(config_name="demo", work_name="main", key="A")
-        again = jar.get_or_assign_port(config_name="demo", work_name="main", key="A")
-
-        assert again == first
-
-    def test_different_work_name_gets_different_port(self) -> None:
-        jar = Jar()
-
-        main_port = jar.get_or_assign_port(
-            config_name="demo", work_name="main", key="A"
-        )
-        feature_port = jar.get_or_assign_port(
-            config_name="demo", work_name="feature", key="A"
-        )
-
-        assert main_port != feature_port
-
-    def test_load_missing_file_returns_empty_jar(self, tmp_path: Path) -> None:
-        jar = Jar.load(tmp_path / "missing.json")
-
-        assert jar.ports == {}
-
-    def test_save_load_roundtrip(self, tmp_path: Path) -> None:
-        json_path = tmp_path / "jar.json"
-        jar = Jar(ports={"demo:main:DEMO_API_PORT": 30000})
-
-        jar.save(json_path)
-        loaded = Jar.load(json_path)
-
-        assert loaded == jar
-
-    def test_save_writes_sorted_indented_json(self, tmp_path: Path) -> None:
-        json_path = tmp_path / "jar.json"
-        jar = Jar(ports={"b": 30001, "a": 30000})
-
-        jar.save(json_path)
-
-        expected = json.dumps(
-            {"ports": {"a": 30000, "b": 30001}}, indent=2, sort_keys=True
-        )
-        assert json_path.read_text() == expected
 
 
 def _devconfig(services: list[dict[str, str]], work_name: str = "main") -> DevConfig:
