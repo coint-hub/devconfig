@@ -2,7 +2,7 @@ import json
 from enum import StrEnum, auto, unique
 from pathlib import Path
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class Jar(BaseModel):
@@ -41,6 +41,10 @@ class DevConfigServiceModel(BaseModel):
     name: str
     type: DevConfigServiceType | None = None
     path: Path | None = None
+    cors_allowed_services: list[str] = Field(default=[], alias="corsAllowedServices")
+    cors_allowed_services_key: str | None = Field(
+        default=None, alias="corsAllowedServicesKey"
+    )
 
 
 class DevConfigModel(BaseModel):

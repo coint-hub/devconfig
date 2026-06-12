@@ -113,6 +113,29 @@ class DevConfigService:
         )
         with open(yaml_path, "w") as f:
             f.write(f"server.port: {port.value}\n")
+            if self.model.cors_allowed_services:
+                key = self.model.cors_allowed_services_key
+                assert key is not None, (
+                    f"corsAllowedServicesKey is required for corsAllowedServices: "
+                    f"{self.model.name=}"
+                )
+                f.write(f"{key}: {self._cors_allowed_origins()}\n")
+
+    def _cors_allowed_origins(self) -> str:
+        urls: list[str] = []
+        for name in self.model.cors_allowed_services:
+            target = next(
+                (s for s in self.parent.services if s.model.name == name), None
+            )
+            assert target is not None, (
+                f"requested service is not found: {self.model.name=}, {name=}"
+            )
+            url = target.url
+            assert url is not None, (
+                f"requested service has no url: {self.model.name=}, {name=}"
+            )
+            urls.append(url.value)
+        return ",".join(urls)
 
 
 def write_envrc(envrc_path: Path, values: dict[str, str]) -> None:
