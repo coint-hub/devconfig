@@ -11,12 +11,12 @@ A small CLI that gives local dev projects stable, non-conflicting port assignmen
 The toolchain comes from `shell.nix` (pinned nixpkgs unstable: Python 3.14, uv, ruff, basedpyright, ty) and is loaded via direnv (`.envrc` → `use nix`). Dependencies are managed by uv as a workspace: root `pyproject.toml` is a non-package workspace whose only member is `devconfig/`.
 
 - Run the CLI: `./devconfig.sh` — must be invoked with the *target project* as cwd (the script `exec`s `direnv exec` + `uv run` against this repo, but `Config.work_path = Path.cwd()`). It sets `DEVCONFIG_JAR` to this repo's `jar.json`.
+- Run all checks: `make test` — runs pytest, `ruff check`, `ruff format --check`, `ty check`, and `basedpyright` in sequence; use this to verify changes
+- Tests only: `uv run pytest -q`
 - Lint: `ruff check`
 - Format: `ruff format`
 - Type check: `basedpyright` (configured in `pyrightconfig.json` with `typeCheckingMode: "all"`)
 - Sync deps: `uv sync`
-
-There are no tests currently.
 
 ## Architecture
 
