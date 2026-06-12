@@ -1,4 +1,5 @@
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import final
 
@@ -16,9 +17,9 @@ def main() -> None:
     jar = Jar.load(Config.jar_path)
 
     devconfig = DevConfig(
-        DevConfigModel.load(Config.devconfig_path), Config.work_path.name
+        DevConfigModel.load(Config.devconfig_path), Config.work_path.name, jar
     )
-    values = devconfig.render(jar)
+    values = devconfig.render()
     write_envrc(Config.envrc_path, values)
 
     jar.save(Config.jar_path)
@@ -32,21 +33,29 @@ class Config:
     jar_path: Path = Path(os.environ["DEVCONFIG_JAR"]).resolve()
 
 
+@dataclass
+class Property:
+    name: str
+    value: str
+
+
 @final
 class DevConfig:
-    def __init__(self, model: DevConfigModel, work_name: str) -> None:
+    def __init__(self, model: DevConfigModel, work_name: str, jar: Jar) -> None:
         self.model = model
         self.work_name = work_name
+        self.jar = jar
         self.services = [DevConfigService(model=s, parent=self) for s in model.services]
 
-    def render(self, jar: Jar) -> dict[str, str]:
+    def render(self) -> dict[str, str]:
         values: dict[str, str] = {}
         values[_key(self.model.name, "work_name")] = self.work_name
         for service in self.services:
-            service_values = service.render(jar=jar)
-            for key, value in service_values:
-                assert key not in values, f"Duplicate environment variable: {key=}"
-                values[key] = value
+            for prop in service.render():
+                assert prop.name not in values, (
+                    f"Duplicate environment variable: {prop.name=}"
+                )
+                values[prop.name] = prop.value
         return values
 
 
@@ -56,15 +65,30 @@ class DevConfigService:
         self.model = model
         self.parent = parent
 
-    def render(self, *, jar: Jar) -> list[tuple[str, str]]:
-        values: list[tuple[str, str]] = []
-        config_name = self.parent.model.name
-
-        port_key = _key(config_name, self.model.name, "port")
-        port = jar.get_or_assign_port(
-            config_name=config_name, work_name=self.parent.work_name, key=port_key
+    @property
+    def port(self) -> Property:
+        key = _key(self.parent.model.name, self.model.name, "port")
+        port = self.parent.jar.get_or_assign_port(
+            config_name=self.parent.model.name,
+            work_name=self.parent.work_name,
+            key=key,
         )
-        values.append((port_key, str(port)))
+        return Property(key, str(port))
+
+    @property
+    def url(self) -> Property | None:
+        match self.model.type:
+            case DevConfigServiceType.SPRING | DevConfigServiceType.WEB:
+                return Property(
+                    _key(self.parent.model.name, self.model.name, "url"),
+                    f"http://127.0.0.1:{self.port.value}",
+                )
+            case None:
+                return None
+
+    def render(self) -> list[Property]:
+        port = self.port
+        values = [port]
 
         # spring config
         match self.model.type:
@@ -73,18 +97,14 @@ class DevConfigService:
             case DevConfigServiceType.WEB | None:
                 pass
         # url
-        match self.model.type:
-            case DevConfigServiceType.SPRING | DevConfigServiceType.WEB:
-                url_key = _key(config_name, self.model.name, "url")
-                url = f"http://127.0.0.1:{port}"
-                values.append((url_key, url))
-                print(f"{self.model.name}: http://127.0.0.1:{port}")
-            case None:
-                pass
+        url = self.url
+        if url is not None:
+            values.append(url)
+            print(f"{self.model.name}: {url.value}")
 
         return values
 
-    def _write_spring_config(self, port: int) -> None:
+    def _write_spring_config(self, port: Property) -> None:
         assert self.model.path is not None, (
             f"Path is required for SPRING service: {self.model.name=}"
         )
@@ -92,7 +112,7 @@ class DevConfigService:
             self.model.path / "src" / "main" / "resources" / "application-default.yml"
         )
         with open(yaml_path, "w") as f:
-            f.write(f"server.port: {port}\n")
+            f.write(f"server.port: {port.value}\n")
 
 
 def write_envrc(envrc_path: Path, values: dict[str, str]) -> None:
