@@ -83,18 +83,19 @@ class TestDevConfigServiceRender:
             devconfig.services[0].render()
 
 
-class TestDevConfigServiceCors:
+class TestDevConfigServiceReferences:
     def _spring_service(self, tmp_path: Path, **extra: object) -> dict[str, object]:
         (tmp_path / "src" / "main" / "resources").mkdir(parents=True)
         return {"name": "api", "type": "spring", "path": str(tmp_path), **extra}
 
-    def test_writes_cors_allowed_origins(self, tmp_path: Path) -> None:
+    def test_writes_list_reference_comma_joined(self, tmp_path: Path) -> None:
         devconfig = _devconfig(
             [
                 self._spring_service(
                     tmp_path,
-                    corsAllowedServices=["front", "admin"],
-                    corsAllowedServicesKey="app.cors.allowed-origins",
+                    springServiceReferences={
+                        "app.cors.allowed-origins": ["front", "admin"]
+                    },
                 ),
                 {"name": "front", "type": "web"},
                 {"name": "admin", "type": "web"},
@@ -110,13 +111,30 @@ class TestDevConfigServiceCors:
             "http://127.0.0.1:30001,http://127.0.0.1:30002\n"
         )
 
+    def test_writes_single_string_reference(self, tmp_path: Path) -> None:
+        devconfig = _devconfig(
+            [
+                self._spring_service(
+                    tmp_path,
+                    springServiceReferences={"app.auth.api-url": "backend-auth"},
+                ),
+                {"name": "backend-auth", "type": "web"},
+            ]
+        )
+
+        devconfig.services[0].render()
+
+        yaml_path = tmp_path / "src" / "main" / "resources" / "application-default.yml"
+        assert yaml_path.read_text() == (
+            "server.port: 30000\napp.auth.api-url: http://127.0.0.1:30001\n"
+        )
+
     def test_missing_service_raises(self, tmp_path: Path) -> None:
         devconfig = _devconfig(
             [
                 self._spring_service(
                     tmp_path,
-                    corsAllowedServices=["front"],
-                    corsAllowedServicesKey="app.cors.allowed-origins",
+                    springServiceReferences={"app.cors.allowed-origins": ["front"]},
                 )
             ]
         )
@@ -124,24 +142,12 @@ class TestDevConfigServiceCors:
         with pytest.raises(AssertionError, match="not found"):
             devconfig.services[0].render()
 
-    def test_missing_key_raises(self, tmp_path: Path) -> None:
-        devconfig = _devconfig(
-            [
-                self._spring_service(tmp_path, corsAllowedServices=["front"]),
-                {"name": "front", "type": "web"},
-            ]
-        )
-
-        with pytest.raises(AssertionError, match="corsAllowedServicesKey"):
-            devconfig.services[0].render()
-
     def test_untyped_service_raises(self, tmp_path: Path) -> None:
         devconfig = _devconfig(
             [
                 self._spring_service(
                     tmp_path,
-                    corsAllowedServices=["db"],
-                    corsAllowedServicesKey="app.cors.allowed-origins",
+                    springServiceReferences={"app.cors.allowed-origins": ["db"]},
                 ),
                 {"name": "db"},
             ]

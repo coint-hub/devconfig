@@ -41,9 +41,8 @@ class DevConfigServiceModel(BaseModel):
     name: str
     type: DevConfigServiceType | None = None
     path: Path | None = None
-    cors_allowed_services: list[str] = Field(default=[], alias="corsAllowedServices")
-    cors_allowed_services_key: str | None = Field(
-        default=None, alias="corsAllowedServicesKey"
+    spring_service_references: dict[str, str | list[str]] = Field(
+        default={}, alias="springServiceReferences"
     )
 
 

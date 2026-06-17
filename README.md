@@ -35,6 +35,32 @@ source_env_if_exists .envrc.devconfig
 
 Each service gets a `MYPROJECT_<SERVICE>_PORT` variable. Services typed `spring` or `web` also get a `MYPROJECT_<SERVICE>_URL`. For `spring` services, `application-default.yml` containing `server.port` is written into the given `path`.
 
+### Referencing other services from a spring config
+
+A `spring` service can write other services' URLs into its `application-default.yml` under arbitrary keys via `springServiceReferences`. A string value resolves to a single URL; a list resolves to comma-joined URLs:
+
+```json
+{
+  "name": "backend_api",
+  "type": "spring",
+  "path": "backend/api",
+  "springServiceReferences": {
+    "app.cors.allowed-origins": ["frontend_web", "admin_web"],
+    "app.auth.api-url": "backend_auth"
+  }
+}
+```
+
+writes:
+
+```yaml
+server.port: 30000
+app.cors.allowed-origins: http://127.0.0.1:30001,http://127.0.0.1:30002
+app.auth.api-url: http://127.0.0.1:30003
+```
+
+Referenced services must be typed `spring` or `web` (i.e. have a URL).
+
 ## Development
 
 The toolchain (Python 3.14, uv, ruff, basedpyright) is provided by `shell.nix` via direnv. See [CLAUDE.md](CLAUDE.md) for details.
