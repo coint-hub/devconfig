@@ -17,7 +17,7 @@ def main() -> None:
     jar = Jar.load(Config.jar_path)
 
     devconfig = DevConfig(
-        DevConfigModel.load(Config.devconfig_path), Config.work_path.name, jar
+        DevConfigModel.load(Config.devconfig_path), Config.work_path, jar
     )
     values = devconfig.render()
     write_envrc(Config.envrc_path, values)
@@ -41,15 +41,18 @@ class Property:
 
 @final
 class DevConfig:
-    def __init__(self, model: DevConfigModel, work_name: str, jar: Jar) -> None:
+    def __init__(self, model: DevConfigModel, work_path: Path, jar: Jar) -> None:
         self.model = model
-        self.work_name = work_name
+        self.work_path = work_path
+        self.work_name = work_path.name
         self.jar = jar
         self.services = [DevConfigService(model=s, parent=self) for s in model.services]
 
     def render(self) -> dict[str, str]:
         values: dict[str, str] = {}
         values[_key(self.model.name, "work_name")] = self.work_name
+        values[_key(self.model.name, "dir")] = str(self.work_path)
+        values[_key(self.model.name, "worktree_dir")] = str(self.work_path.parent)
         for service in self.services:
             for prop in service.render():
                 assert prop.name not in values, (

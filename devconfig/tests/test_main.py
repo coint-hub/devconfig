@@ -19,9 +19,15 @@ def test_key_joins_and_uppercases() -> None:
     assert _key("demo") == "DEMO"
 
 
-def _devconfig(services: list[dict[str, object]], work_name: str = "main") -> DevConfig:
+_DEFAULT_WORK_PATH = Path("/work/myproject.worktree/main")
+
+
+def _devconfig(
+    services: list[dict[str, object]],
+    work_path: Path = _DEFAULT_WORK_PATH,
+) -> DevConfig:
     model = DevConfigModel.model_validate({"name": "demo", "services": services})
-    return DevConfig(model, work_name, Jar())
+    return DevConfig(model, work_path, Jar())
 
 
 class TestDevConfigServiceProperties:
@@ -160,13 +166,16 @@ class TestDevConfigServiceReferences:
 class TestDevConfigRender:
     def test_renders_work_name_and_all_services(self) -> None:
         devconfig = _devconfig(
-            [{"name": "front", "type": "web"}, {"name": "db"}], work_name="feature"
+            [{"name": "front", "type": "web"}, {"name": "db"}],
+            work_path=Path("/work/myproject.worktree/feature"),
         )
 
         values = devconfig.render()
 
         assert values == {
             "DEMO_WORK_NAME": "feature",
+            "DEMO_DIR": "/work/myproject.worktree/feature",
+            "DEMO_WORKTREE_DIR": "/work/myproject.worktree",
             "DEMO_FRONT_PORT": "30000",
             "DEMO_FRONT_URL": "http://127.0.0.1:30000",
             "DEMO_DB_PORT": "30001",
@@ -221,6 +230,8 @@ class TestMain:
         work_name = work_path.name
         assert (work_path / ".envrc.devconfig").read_text() == (
             f'export DEMO_WORK_NAME="{work_name}"\n'
+            f'export DEMO_DIR="{work_path}"\n'
+            f'export DEMO_WORKTREE_DIR="{work_path.parent}"\n'
             'export DEMO_FRONT_PORT="30000"\n'
             'export DEMO_FRONT_URL="http://127.0.0.1:30000"\n'
             'export DEMO_DB_PORT="30001"\n'
