@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+exec direnv exec "${DIR}" uv run --project "${DIR}/devconfig" devconfig "$@"
