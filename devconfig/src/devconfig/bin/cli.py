@@ -21,6 +21,7 @@ COMPOSE_OVERRIDE_MARKER = "# devconfig"
 @unique
 class ModuleServiceType(StrEnum):
     WEB = auto()
+    FLASK = auto()
 
 
 @unique
@@ -112,7 +113,7 @@ def init() -> None:
         _validate_compose(root, module)
 
     jar = Jar.load(jar_path)
-    ports = _assign_ports(config, work_name=root.name, jar=jar)
+    values = _assign_values(config, work_name=root.name, jar=jar)
 
     for directory, line in targets:
         envrc = directory / ".envrc"
@@ -123,13 +124,13 @@ def init() -> None:
             typer.echo(f"{envrc}: wrote {line!r}")
         _direnv_allow(directory)
 
-    ports_path = root.parent / f"devconfig-{root.name}.json"
-    with open(ports_path, "w") as f:
-        json.dump(ports, f, indent=2, sort_keys=True, ensure_ascii=False)
-    typer.echo(f"{ports_path}: wrote {len(ports)} ports")
+    values_path = root.parent / f"devconfig-{root.name}.json"
+    with open(values_path, "w") as f:
+        json.dump(values, f, indent=2, sort_keys=True, ensure_ascii=False)
+    typer.echo(f"{values_path}: wrote {len(values)} values")
 
     for module in config.modules:
-        _write_compose_override(root, config, module, ports)
+        _write_compose_override(root, config, module, values)
 
     jar.save(jar_path)
 
@@ -152,23 +153,36 @@ def _validate_compose(root: Path, module: DevConfigModule) -> None:
         )
 
 
-def _assign_ports(config: DevConfig, *, work_name: str, jar: Jar) -> dict[str, int]:
-    ports: dict[str, int] = {}
+def _assign_values(
+    config: DevConfig, *, work_name: str, jar: Jar
+) -> dict[str, int | bool]:
+    values: dict[str, int | bool] = {}
+
+    def put(key: str, value: int | bool) -> None:
+        assert key not in values, f"duplicate environment variable: {key=}"
+        values[key] = value
+
     for module in config.modules:
         compose_services = (
             [] if module.docker_compose is None else module.docker_compose.services
         )
         for service in [*module.services, *compose_services]:
             key = _key(config.project_name, module.name, service.name, "port")
-            assert key not in ports, f"duplicate environment variable: {key=}"
-            ports[key] = jar.get_or_assign_port(
+            port = jar.get_or_assign_port(
                 config_name=config.project_name, work_name=work_name, key=key
             )
-    return ports
+            put(key, port)
+        for service in module.services:
+            if service.type is ModuleServiceType.FLASK:
+                put(_key(config.project_name, module.name, service.name, "debug"), True)
+    return values
 
 
 def _write_compose_override(
-    root: Path, config: DevConfig, module: DevConfigModule, ports: dict[str, int]
+    root: Path,
+    config: DevConfig,
+    module: DevConfigModule,
+    values: dict[str, int | bool],
 ) -> None:
     if module.docker_compose is None:
         return
@@ -180,7 +194,7 @@ def _write_compose_override(
         "services:",
     ]
     for service in module.docker_compose.services:
-        port = ports[_key(config.project_name, module.name, service.name, "port")]
+        port = values[_key(config.project_name, module.name, service.name, "port")]
         lines += [
             f"  {service.name}:",
             # !override replaces the base file's ports; a plain merge appends.

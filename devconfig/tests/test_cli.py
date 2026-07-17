@@ -10,11 +10,11 @@ from devconfig.bin.cli import app, find_root
 
 runner = CliRunner()
 
-_ports_adapter = TypeAdapter(dict[str, int])
+_values_adapter = TypeAdapter(dict[str, int | bool])
 
 
-def _read_ports(path: Path) -> dict[str, int]:
-    return _ports_adapter.validate_json(path.read_text())
+def _read_values(path: Path) -> dict[str, int | bool]:
+    return _values_adapter.validate_json(path.read_text())
 
 
 @pytest.fixture(autouse=True)
@@ -223,7 +223,7 @@ class TestInitPorts:
         result = runner.invoke(app, ["init"])
 
         assert result.exit_code == 0, result.output
-        data = _read_ports(container / "devconfig-main.json")
+        data = _read_values(container / "devconfig-main.json")
         assert data == {
             "AWESOME_PROJECT_AWESOME_WAS_API_PORT": 30000,
             "AWESOME_PROJECT_AWESOME_WAS_DB_PORT": 30001,
@@ -236,11 +236,11 @@ class TestInitPorts:
         root = _make_worktree(container, "main", [WAS_MODULE])
         monkeypatch.chdir(root)
         assert runner.invoke(app, ["init"]).exit_code == 0
-        first = _read_ports(container / "devconfig-main.json")
+        first = _read_values(container / "devconfig-main.json")
 
         assert runner.invoke(app, ["init"]).exit_code == 0
 
-        second = _read_ports(container / "devconfig-main.json")
+        second = _read_values(container / "devconfig-main.json")
         assert first == second
 
     def test_worktrees_get_distinct_ports(
@@ -255,9 +255,34 @@ class TestInitPorts:
 
         assert runner.invoke(app, ["init"]).exit_code == 0
 
-        main_ports = _read_ports(container / "devconfig-main.json")
-        feature_ports = _read_ports(container / "devconfig-feature.json")
+        main_ports = _read_values(container / "devconfig-main.json")
+        feature_ports = _read_values(container / "devconfig-feature.json")
         assert set(main_ports.values()).isdisjoint(feature_ports.values())
+
+    def test_flask_service_gets_debug_flag(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        container = tmp_path / "awesome.worktree"
+        module: dict[str, object] = {
+            "name": "awesome-was",
+            "services": [{"name": "api", "type": "flask"}],
+            "docker-compose": {"services": [{"name": "db", "type": "postgresql"}]},
+        }
+        root = _make_worktree(container, "main", [module])
+        monkeypatch.chdir(root)
+
+        result = runner.invoke(app, ["init"])
+
+        assert result.exit_code == 0, result.output
+        values_path = container / "devconfig-main.json"
+        assert _read_values(values_path) == {
+            "AWESOME_PROJECT_AWESOME_WAS_API_DEBUG": True,
+            "AWESOME_PROJECT_AWESOME_WAS_API_PORT": 30000,
+            "AWESOME_PROJECT_AWESOME_WAS_DB_PORT": 30001,
+        }
+        assert (
+            '"AWESOME_PROJECT_AWESOME_WAS_API_DEBUG": true' in values_path.read_text()
+        )
 
     def test_module_without_services_yields_empty_ports_file(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -269,7 +294,7 @@ class TestInitPorts:
         result = runner.invoke(app, ["init"])
 
         assert result.exit_code == 0, result.output
-        assert _read_ports(container / "devconfig-main.json") == {}
+        assert _read_values(container / "devconfig-main.json") == {}
 
     def test_duplicate_service_names_abort_before_writing(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, allowed: list[Path]
