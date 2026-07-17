@@ -2,12 +2,41 @@ import json
 from pathlib import Path
 
 import pytest
+from pydantic import TypeAdapter
 from typer.testing import CliRunner
 
 from devconfig.bin import cli
 from devconfig.bin.cli import app, find_root
 
 runner = CliRunner()
+
+_ports_adapter = TypeAdapter(dict[str, int])
+
+
+def _read_ports(path: Path) -> dict[str, int]:
+    return _ports_adapter.validate_json(path.read_text())
+
+
+@pytest.fixture(autouse=True)
+def allowed(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
+    calls: list[Path] = []
+    monkeypatch.setattr(cli, "_direnv_allow", calls.append)
+    return calls
+
+
+@pytest.fixture(autouse=True)
+def jar_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    path = tmp_path / "jar.json"
+    monkeypatch.setenv("DEVCONFIG_JAR", str(path))
+    return path
+
+
+@pytest.fixture(autouse=True)
+def git_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
+    def ignored(_: Path) -> bool:
+        return True
+
+    monkeypatch.setattr(cli, "_git_ignored", ignored)
 
 
 def test_no_arguments_shows_help() -> None:
@@ -29,6 +58,32 @@ def _make_project(root: Path, modules: list[str]) -> None:
     )
     for name in modules:
         (root / name).mkdir()
+
+
+WAS_MODULE: dict[str, object] = {
+    "name": "awesome-was",
+    "services": [{"name": "api", "type": "web"}],
+    "docker-compose": {"services": [{"name": "db", "type": "postgresql"}]},
+}
+
+
+def _make_worktree(
+    container: Path, work_name: str, modules: list[dict[str, object]]
+) -> Path:
+    root = container / work_name
+    root.mkdir(parents=True)
+    (root / ".git").mkdir()
+    (root / "devconfig.json").write_text(
+        json.dumps({"project_name": "awesome-project", "modules": modules})
+    )
+    for module in modules:
+        name = module["name"]
+        assert isinstance(name, str)
+        module_dir = root / name
+        module_dir.mkdir()
+        if "docker-compose" in module:
+            (module_dir / "compose.yaml").touch()
+    return root
 
 
 class TestFindRoot:
@@ -74,12 +129,6 @@ class TestFindRoot:
 
 
 class TestInit:
-    @pytest.fixture
-    def allowed(self, monkeypatch: pytest.MonkeyPatch) -> list[Path]:
-        calls: list[Path] = []
-        monkeypatch.setattr(cli, "_direnv_allow", calls.append)
-        return calls
-
     def test_fresh_init_writes_envrc_and_allows(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, allowed: list[Path]
     ) -> None:
@@ -98,7 +147,6 @@ class TestInit:
             tmp_path / "awesome-api",
         ]
 
-    @pytest.mark.usefixtures("allowed")
     def test_init_from_module_directory(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -111,7 +159,6 @@ class TestInit:
         assert (tmp_path / ".envrc").read_text() == "use nix\n"
         assert (tmp_path / "awesome-app" / ".envrc").read_text() == "source_up\n"
 
-    @pytest.mark.usefixtures("allowed")
     def test_rerun_is_idempotent(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -163,3 +210,171 @@ class TestInit:
 
         assert not (tmp_path / ".envrc").exists()
         assert allowed == []
+
+
+class TestInitPorts:
+    def test_writes_ports_file_to_worktree_container(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        container = tmp_path / "awesome.worktree"
+        root = _make_worktree(container, "main", [WAS_MODULE])
+        monkeypatch.chdir(root)
+
+        result = runner.invoke(app, ["init"])
+
+        assert result.exit_code == 0, result.output
+        data = _read_ports(container / "devconfig-main.json")
+        assert data == {
+            "AWESOME_PROJECT_AWESOME_WAS_API_PORT": 30000,
+            "AWESOME_PROJECT_AWESOME_WAS_DB_PORT": 30001,
+        }
+
+    def test_rerun_yields_same_ports(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        container = tmp_path / "awesome.worktree"
+        root = _make_worktree(container, "main", [WAS_MODULE])
+        monkeypatch.chdir(root)
+        assert runner.invoke(app, ["init"]).exit_code == 0
+        first = _read_ports(container / "devconfig-main.json")
+
+        assert runner.invoke(app, ["init"]).exit_code == 0
+
+        second = _read_ports(container / "devconfig-main.json")
+        assert first == second
+
+    def test_worktrees_get_distinct_ports(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        container = tmp_path / "awesome.worktree"
+        root_main = _make_worktree(container, "main", [WAS_MODULE])
+        root_feature = _make_worktree(container, "feature", [WAS_MODULE])
+        monkeypatch.chdir(root_main)
+        assert runner.invoke(app, ["init"]).exit_code == 0
+        monkeypatch.chdir(root_feature)
+
+        assert runner.invoke(app, ["init"]).exit_code == 0
+
+        main_ports = _read_ports(container / "devconfig-main.json")
+        feature_ports = _read_ports(container / "devconfig-feature.json")
+        assert set(main_ports.values()).isdisjoint(feature_ports.values())
+
+    def test_module_without_services_yields_empty_ports_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        container = tmp_path / "awesome.worktree"
+        root = _make_worktree(container, "main", [{"name": "awesome-app"}])
+        monkeypatch.chdir(root)
+
+        result = runner.invoke(app, ["init"])
+
+        assert result.exit_code == 0, result.output
+        assert _read_ports(container / "devconfig-main.json") == {}
+
+    def test_duplicate_service_names_abort_before_writing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, allowed: list[Path]
+    ) -> None:
+        container = tmp_path / "awesome.worktree"
+        module: dict[str, object] = {
+            "name": "awesome-was",
+            "services": [{"name": "db", "type": "web"}],
+            "docker-compose": {"services": [{"name": "db", "type": "postgresql"}]},
+        }
+        root = _make_worktree(container, "main", [module])
+        monkeypatch.chdir(root)
+
+        with pytest.raises(AssertionError, match="duplicate environment variable"):
+            cli.init()
+
+        assert not (root / ".envrc").exists()
+        assert not (container / "devconfig-main.json").exists()
+        assert allowed == []
+
+
+class TestCompose:
+    def test_writes_override(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        container = tmp_path / "awesome.worktree"
+        root = _make_worktree(container, "main", [WAS_MODULE])
+        monkeypatch.chdir(root)
+
+        result = runner.invoke(app, ["init"])
+
+        assert result.exit_code == 0, result.output
+        override = root / "awesome-was" / "compose.override.yaml"
+        assert override.read_text() == (
+            "# devconfig\n"
+            "name: awesome-project-awesome-was-main\n"
+            "services:\n"
+            "  db:\n"
+            "    ports: !override\n"
+            '      - "30001:5432"\n'
+        )
+
+    def test_missing_compose_yaml_aborts_before_writing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, allowed: list[Path]
+    ) -> None:
+        container = tmp_path / "awesome.worktree"
+        root = _make_worktree(container, "main", [WAS_MODULE])
+        (root / "awesome-was" / "compose.yaml").unlink()
+        monkeypatch.chdir(root)
+
+        with pytest.raises(AssertionError, match="compose file not found"):
+            cli.init()
+
+        assert not (root / ".envrc").exists()
+        assert not (container / "devconfig-main.json").exists()
+        assert allowed == []
+
+    def test_not_git_ignored_aborts_before_writing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, allowed: list[Path]
+    ) -> None:
+        container = tmp_path / "awesome.worktree"
+        root = _make_worktree(container, "main", [WAS_MODULE])
+        monkeypatch.chdir(root)
+
+        def not_ignored(_: Path) -> bool:
+            return False
+
+        monkeypatch.setattr(cli, "_git_ignored", not_ignored)
+
+        with pytest.raises(AssertionError, match="not ignored by git"):
+            cli.init()
+
+        assert not (root / ".envrc").exists()
+        assert not (container / "devconfig-main.json").exists()
+        assert not (root / "awesome-was" / "compose.override.yaml").exists()
+        assert allowed == []
+
+    def test_foreign_override_aborts_before_writing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, allowed: list[Path]
+    ) -> None:
+        container = tmp_path / "awesome.worktree"
+        root = _make_worktree(container, "main", [WAS_MODULE])
+        override = root / "awesome-was" / "compose.override.yaml"
+        override.write_text("services:\n  db:\n    ports: []\n")
+        monkeypatch.chdir(root)
+
+        with pytest.raises(AssertionError, match="marker"):
+            cli.init()
+
+        assert not (root / ".envrc").exists()
+        assert not (container / "devconfig-main.json").exists()
+        assert override.read_text() == "services:\n  db:\n    ports: []\n"
+        assert allowed == []
+
+    def test_rerun_over_own_override_succeeds(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        container = tmp_path / "awesome.worktree"
+        root = _make_worktree(container, "main", [WAS_MODULE])
+        monkeypatch.chdir(root)
+        assert runner.invoke(app, ["init"]).exit_code == 0
+        override = root / "awesome-was" / "compose.override.yaml"
+        first = override.read_text()
+
+        result = runner.invoke(app, ["init"])
+
+        assert result.exit_code == 0, result.output
+        assert override.read_text() == first
