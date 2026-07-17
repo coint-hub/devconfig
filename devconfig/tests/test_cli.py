@@ -10,10 +10,10 @@ from devconfig.bin.cli import app, find_root
 
 runner = CliRunner()
 
-_values_adapter = TypeAdapter(dict[str, int | bool])
+_values_adapter = TypeAdapter(dict[str, int | bool | str])
 
 
-def _read_values(path: Path) -> dict[str, int | bool]:
+def _read_values(path: Path) -> dict[str, int | bool | str]:
     return _values_adapter.validate_json(path.read_text())
 
 
@@ -275,7 +275,12 @@ class TestInitPorts:
 
         assert result.exit_code == 0, result.output
         values_path = container / "devconfig-main.json"
-        assert _read_values(values_path) == {
+        data = _read_values(values_path)
+        secret = data.pop("AWESOME_PROJECT_AWESOME_WAS_API_SECRET_KEY")
+        assert isinstance(secret, str)
+        assert len(secret) == 64
+        assert int(secret, 16) >= 0
+        assert data == {
             "AWESOME_PROJECT_AWESOME_WAS_API_DEBUG": True,
             "AWESOME_PROJECT_AWESOME_WAS_API_PORT": 30000,
             "AWESOME_PROJECT_AWESOME_WAS_DB_PORT": 30001,
@@ -283,6 +288,11 @@ class TestInitPorts:
         assert (
             '"AWESOME_PROJECT_AWESOME_WAS_API_DEBUG": true' in values_path.read_text()
         )
+
+        assert runner.invoke(app, ["init"]).exit_code == 0
+
+        rerun = _read_values(values_path)
+        assert rerun["AWESOME_PROJECT_AWESOME_WAS_API_SECRET_KEY"] == secret
 
     def test_module_without_services_yields_empty_ports_file(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

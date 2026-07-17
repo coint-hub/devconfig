@@ -155,10 +155,10 @@ def _validate_compose(root: Path, module: DevConfigModule) -> None:
 
 def _assign_values(
     config: DevConfig, *, work_name: str, jar: Jar
-) -> dict[str, int | bool]:
-    values: dict[str, int | bool] = {}
+) -> dict[str, int | bool | str]:
+    values: dict[str, int | bool | str] = {}
 
-    def put(key: str, value: int | bool) -> None:
+    def put(key: str, value: int | bool | str) -> None:
         assert key not in values, f"duplicate environment variable: {key=}"
         values[key] = value
 
@@ -175,6 +175,13 @@ def _assign_values(
         for service in module.services:
             if service.type is ModuleServiceType.FLASK:
                 put(_key(config.project_name, module.name, service.name, "debug"), True)
+                secret_key = _key(
+                    config.project_name, module.name, service.name, "secret_key"
+                )
+                secret = jar.get_or_assign_secret(
+                    config_name=config.project_name, work_name=work_name, key=secret_key
+                )
+                put(secret_key, secret)
     return values
 
 
@@ -182,7 +189,7 @@ def _write_compose_override(
     root: Path,
     config: DevConfig,
     module: DevConfigModule,
-    values: dict[str, int | bool],
+    values: dict[str, int | bool | str],
 ) -> None:
     if module.docker_compose is None:
         return

@@ -37,28 +37,71 @@ class TestJar:
 
         assert main_port != feature_port
 
+    def test_assigns_64_hex_char_secret(self) -> None:
+        jar = Jar()
+
+        secret = jar.get_or_assign_secret(config_name="demo", work_name="main", key="A")
+
+        assert len(secret) == 64
+        assert int(secret, 16) >= 0
+
+    def test_same_key_returns_same_secret(self) -> None:
+        jar = Jar()
+
+        first = jar.get_or_assign_secret(config_name="demo", work_name="main", key="A")
+        again = jar.get_or_assign_secret(config_name="demo", work_name="main", key="A")
+
+        assert again == first
+
+    def test_different_work_name_gets_different_secret(self) -> None:
+        jar = Jar()
+
+        main_secret = jar.get_or_assign_secret(
+            config_name="demo", work_name="main", key="A"
+        )
+        feature_secret = jar.get_or_assign_secret(
+            config_name="demo", work_name="feature", key="A"
+        )
+
+        assert main_secret != feature_secret
+
     def test_load_missing_file_returns_empty_jar(self, tmp_path: Path) -> None:
         jar = Jar.load(tmp_path / "missing.json")
 
         assert jar.ports == {}
+        assert jar.secrets == {}
 
     def test_save_load_roundtrip(self, tmp_path: Path) -> None:
         json_path = tmp_path / "jar.json"
-        jar = Jar(ports={"demo:main:DEMO_API_PORT": 30000})
+        jar = Jar(
+            ports={"demo:main:DEMO_API_PORT": 30000},
+            secrets={"demo:main:DEMO_API_SECRET_KEY": "ab" * 32},
+        )
 
         jar.save(json_path)
         loaded = Jar.load(json_path)
 
         assert loaded == jar
 
+    def test_load_jar_without_secrets_field(self, tmp_path: Path) -> None:
+        json_path = tmp_path / "jar.json"
+        json_path.write_text(json.dumps({"ports": {"a": 30000}}))
+
+        jar = Jar.load(json_path)
+
+        assert jar.ports == {"a": 30000}
+        assert jar.secrets == {}
+
     def test_save_writes_sorted_indented_json(self, tmp_path: Path) -> None:
         json_path = tmp_path / "jar.json"
-        jar = Jar(ports={"b": 30001, "a": 30000})
+        jar = Jar(ports={"b": 30001, "a": 30000}, secrets={"s": "ab" * 32})
 
         jar.save(json_path)
 
         expected = json.dumps(
-            {"ports": {"a": 30000, "b": 30001}}, indent=2, sort_keys=True
+            {"ports": {"a": 30000, "b": 30001}, "secrets": {"s": "ab" * 32}},
+            indent=2,
+            sort_keys=True,
         )
         assert json_path.read_text() == expected
 
