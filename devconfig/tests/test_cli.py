@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -413,3 +414,121 @@ class TestCompose:
 
         assert result.exit_code == 0, result.output
         assert override.read_text() == first
+
+
+ADMIN_MODULE: dict[str, object] = {
+    "name": "awesome-admin",
+    "services": [{"name": "vite", "type": "vite"}],
+}
+
+
+class TestVite:
+    def test_writes_vite_sh(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        container = tmp_path / "awesome.worktree"
+        root = _make_worktree(container, "main", [ADMIN_MODULE])
+        monkeypatch.chdir(root)
+
+        result = runner.invoke(app, ["init"])
+
+        assert result.exit_code == 0, result.output
+        vite_sh = root / "awesome-admin" / "vite.sh"
+        expected = "\n".join(
+            [
+                "#!/bin/sh",
+                "# devconfig",
+                'exec pnpm exec vite --port=30000 --host="0.0.0.0" "$@"',
+                "",
+            ]
+        )
+        assert vite_sh.read_text() == expected
+        assert os.access(vite_sh, os.X_OK)
+
+    def test_not_git_ignored_aborts_before_writing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, allowed: list[Path]
+    ) -> None:
+        container = tmp_path / "awesome.worktree"
+        root = _make_worktree(container, "main", [ADMIN_MODULE])
+        monkeypatch.chdir(root)
+
+        def not_ignored(_: Path) -> bool:
+            return False
+
+        monkeypatch.setattr(cli, "_git_ignored", not_ignored)
+
+        with pytest.raises(AssertionError, match="not ignored by git"):
+            cli.init()
+
+        assert not (root / ".envrc").exists()
+        assert not (container / "devconfig-main.json").exists()
+        assert not (root / "awesome-admin" / "vite.sh").exists()
+        assert allowed == []
+
+    def test_foreign_vite_sh_aborts_before_writing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, allowed: list[Path]
+    ) -> None:
+        container = tmp_path / "awesome.worktree"
+        root = _make_worktree(container, "main", [ADMIN_MODULE])
+        vite_sh = root / "awesome-admin" / "vite.sh"
+        vite_sh.write_text('export PORT="8080"\n')
+        monkeypatch.chdir(root)
+
+        with pytest.raises(AssertionError, match="marker"):
+            cli.init()
+
+        assert not (root / ".envrc").exists()
+        assert not (container / "devconfig-main.json").exists()
+        assert vite_sh.read_text() == 'export PORT="8080"\n'
+        assert allowed == []
+
+    def test_rerun_over_own_vite_sh_succeeds(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        container = tmp_path / "awesome.worktree"
+        root = _make_worktree(container, "main", [ADMIN_MODULE])
+        monkeypatch.chdir(root)
+        assert runner.invoke(app, ["init"]).exit_code == 0
+        vite_sh = root / "awesome-admin" / "vite.sh"
+        first = vite_sh.read_text()
+
+        result = runner.invoke(app, ["init"])
+
+        assert result.exit_code == 0, result.output
+        assert vite_sh.read_text() == first
+
+    def test_markerfirst_vite_sh_without_shebang_is_replaced(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        container = tmp_path / "awesome.worktree"
+        root = _make_worktree(container, "main", [ADMIN_MODULE])
+        vite_sh = root / "awesome-admin" / "vite.sh"
+        vite_sh.write_text('# devconfig\nexport PORT="30000"\n')
+        monkeypatch.chdir(root)
+
+        result = runner.invoke(app, ["init"])
+
+        assert result.exit_code == 0, result.output
+        assert vite_sh.read_text().startswith("#!/bin/sh\n# devconfig\n")
+
+    def test_two_vite_services_in_module_abort(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, allowed: list[Path]
+    ) -> None:
+        container = tmp_path / "awesome.worktree"
+        module: dict[str, object] = {
+            "name": "awesome-admin",
+            "services": [
+                {"name": "vite", "type": "vite"},
+                {"name": "storybook", "type": "vite"},
+            ],
+        }
+        root = _make_worktree(container, "main", [module])
+        monkeypatch.chdir(root)
+
+        with pytest.raises(AssertionError, match="one vite service"):
+            cli.init()
+
+        assert not (root / ".envrc").exists()
+        assert not (container / "devconfig-main.json").exists()
+        assert not (root / "awesome-admin" / "vite.sh").exists()
+        assert allowed == []

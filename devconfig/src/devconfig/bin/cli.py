@@ -15,13 +15,16 @@ ROOT_ENVRC = "use nix"
 MODULE_ENVRC = "source_up"
 COMPOSE_FILE = "compose.yaml"
 COMPOSE_OVERRIDE_FILE = "compose.override.yaml"
-COMPOSE_OVERRIDE_MARKER = "# devconfig"
+VITE_SH_FILE = "vite.sh"
+VITE_SH_SHEBANG = "#!/bin/sh"
+GENERATED_MARKER = "# devconfig"
 
 
 @unique
 class ModuleServiceType(StrEnum):
     WEB = auto()
     FLASK = auto()
+    VITE = auto()
 
 
 @unique
@@ -111,6 +114,7 @@ def init() -> None:
         )
     for module in config.modules:
         _validate_compose(root, module)
+        _validate_vite(root, module)
 
     jar = Jar.load(jar_path)
     values = _assign_values(config, work_name=root.name, jar=jar)
@@ -131,6 +135,7 @@ def init() -> None:
 
     for module in config.modules:
         _write_compose_override(root, config, module, values)
+        _write_vite_sh(root, config, module, values)
 
     jar.save(jar_path)
 
@@ -147,9 +152,35 @@ def _validate_compose(root: Path, module: DevConfigModule) -> None:
     )
     if override.exists():
         content = override.read_text()
-        assert content.startswith(COMPOSE_OVERRIDE_MARKER), (
+        assert content.startswith(GENERATED_MARKER), (
             f"refusing to touch {override}: "
-            f"missing {COMPOSE_OVERRIDE_MARKER!r} marker, found:\n{content}"
+            f"missing {GENERATED_MARKER!r} marker, found:\n{content}"
+        )
+
+
+def _vite_services(module: DevConfigModule) -> list[ModuleService]:
+    return [s for s in module.services if s.type is ModuleServiceType.VITE]
+
+
+def _validate_vite(root: Path, module: DevConfigModule) -> None:
+    services = _vite_services(module)
+    if not services:
+        return
+    assert len(services) == 1, (
+        f"at most one vite service per module: {module.name=}, "
+        f"found {[s.name for s in services]}"
+    )
+    vite_sh = root / module.name / VITE_SH_FILE
+    assert _git_ignored(vite_sh), (
+        f"refusing to write {vite_sh}: not ignored by git, add it to .gitignore"
+    )
+    if vite_sh.exists():
+        content = vite_sh.read_text()
+        # Early versions wrote the marker without a shebang; accept both.
+        body = content.removeprefix(f"{VITE_SH_SHEBANG}\n")
+        assert body.startswith(GENERATED_MARKER), (
+            f"refusing to touch {vite_sh}: "
+            f"missing {GENERATED_MARKER!r} marker, found:\n{content}"
         )
 
 
@@ -196,7 +227,7 @@ def _write_compose_override(
     # YAML is built by hand because the leading marker comment must survive;
     # switch to a YAML library once one that can emit comments turns up.
     lines = [
-        COMPOSE_OVERRIDE_MARKER,
+        GENERATED_MARKER,
         f"name: {config.project_name}-{module.name}-{root.name}",
         "services:",
     ]
@@ -211,6 +242,28 @@ def _write_compose_override(
     override = root / module.name / COMPOSE_OVERRIDE_FILE
     override.write_text("\n".join(lines) + "\n")
     typer.echo(f"{override}: wrote override")
+
+
+def _write_vite_sh(
+    root: Path,
+    config: DevConfig,
+    module: DevConfigModule,
+    values: dict[str, int | bool | str],
+) -> None:
+    services = _vite_services(module)
+    if not services:
+        return
+    (service,) = services
+    port = values[_key(config.project_name, module.name, service.name, "port")]
+    vite_sh = root / module.name / VITE_SH_FILE
+    lines = [
+        VITE_SH_SHEBANG,
+        GENERATED_MARKER,
+        f'exec pnpm exec vite --port={port} --host="0.0.0.0" "$@"',
+    ]
+    vite_sh.write_text("\n".join(lines) + "\n")
+    vite_sh.chmod(0o755)
+    typer.echo(f"{vite_sh}: wrote launch script, port {port}")
 
 
 def _jar_path() -> Path:
