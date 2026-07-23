@@ -1,6 +1,7 @@
 import json
 import os
 import subprocess
+import tomllib
 from enum import StrEnum, auto, unique
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from devconfig.model import Jar
 
 app = typer.Typer(no_args_is_help=True)
 
+DEVCONFIG_FILE = "devconfig.toml"
 ROOT_ENVRC = "use nix"
 MODULE_ENVRC = "source_up"
 COMPOSE_FILE = "compose.yaml"
@@ -63,25 +65,29 @@ class DevConfig(BaseModel):
     modules: list[DevConfigModule]
 
     @staticmethod
-    def load(json_path: Path) -> DevConfig:
-        with open(json_path, "r") as f:
-            return DevConfig.model_validate(json.load(f))
+    def load(path: Path) -> DevConfig:
+        with open(path, "rb") as f:
+            return DevConfig.model_validate(tomllib.load(f))
 
 
 def find_root(start: Path) -> Path:
-    """Climb from start to the nearest directory holding .git or devconfig.json.
+    """Climb from start to the nearest directory holding .git or devconfig.toml.
 
     Both markers must be present there; .git may be a file (git worktree).
     """
     for directory in (start, *start.parents):
         has_git = (directory / ".git").exists()
-        has_devconfig = (directory / "devconfig.json").exists()
+        has_devconfig = (directory / DEVCONFIG_FILE).exists()
         if has_git and has_devconfig:
             return directory
-        assert not has_git, f"found .git at {directory}, but no devconfig.json"
-        assert not has_devconfig, f"found devconfig.json at {directory}, but no .git"
+        assert not (directory / "devconfig.json").exists(), (
+            f"found legacy devconfig.json at {directory}: "
+            f"convert it to {DEVCONFIG_FILE}"
+        )
+        assert not has_git, f"found .git at {directory}, but no {DEVCONFIG_FILE}"
+        assert not has_devconfig, f"found {DEVCONFIG_FILE} at {directory}, but no .git"
     raise AssertionError(
-        f"not inside a devconfig project: no .git / devconfig.json found from {start}"
+        f"not inside a devconfig project: no .git / {DEVCONFIG_FILE} found from {start}"
     )
 
 
@@ -94,7 +100,7 @@ def main() -> None:
 def init() -> None:
     """Set up direnv, assign ports, and write docker-compose overrides."""
     root = find_root(Path.cwd())
-    config = DevConfig.load(root / "devconfig.json")
+    config = DevConfig.load(root / DEVCONFIG_FILE)
     jar_path = _jar_path()
 
     targets = [(root, ROOT_ENVRC)]

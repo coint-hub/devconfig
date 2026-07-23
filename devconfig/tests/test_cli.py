@@ -1,6 +1,6 @@
-import json
 import os
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 from pydantic import TypeAdapter
@@ -49,40 +49,52 @@ def test_no_arguments_shows_help() -> None:
 
 def _make_project(root: Path, modules: list[str]) -> None:
     (root / ".git").mkdir()
-    (root / "devconfig.json").write_text(
-        json.dumps(
-            {
-                "project_name": "awesome-project",
-                "modules": [{"name": name} for name in modules],
-            }
-        )
+    config = 'project_name = "awesome-project"\n' + "".join(
+        f'\n[[modules]]\nname = "{name}"\n' for name in modules
     )
+    (root / "devconfig.toml").write_text(config)
     for name in modules:
         (root / name).mkdir()
 
 
-WAS_MODULE: dict[str, object] = {
-    "name": "awesome-was",
-    "services": [{"name": "api", "type": "web"}],
-    "docker-compose": {"services": [{"name": "db", "type": "postgresql"}]},
-}
+class ModuleFixture(NamedTuple):
+    name: str
+    toml: str
+    compose: bool = False
+
+
+WAS_MODULE = ModuleFixture(
+    name="awesome-was",
+    compose=True,
+    toml="""\
+[[modules]]
+name = "awesome-was"
+
+[[modules.services]]
+name = "api"
+type = "web"
+
+[[modules.docker-compose.services]]
+name = "db"
+type = "postgresql"
+""",
+)
 
 
 def _make_worktree(
-    container: Path, work_name: str, modules: list[dict[str, object]]
+    container: Path, work_name: str, modules: list[ModuleFixture]
 ) -> Path:
     root = container / work_name
     root.mkdir(parents=True)
     (root / ".git").mkdir()
-    (root / "devconfig.json").write_text(
-        json.dumps({"project_name": "awesome-project", "modules": modules})
+    config = 'project_name = "awesome-project"\n\n' + "\n".join(
+        module.toml for module in modules
     )
+    (root / "devconfig.toml").write_text(config)
     for module in modules:
-        name = module["name"]
-        assert isinstance(name, str)
-        module_dir = root / name
+        module_dir = root / module.name
         module_dir.mkdir()
-        if "docker-compose" in module:
+        if module.compose:
             (module_dir / "compose.yaml").touch()
     return root
 
@@ -90,7 +102,7 @@ def _make_worktree(
 class TestFindRoot:
     def test_finds_root_from_nested_directory(self, tmp_path: Path) -> None:
         (tmp_path / ".git").mkdir()
-        (tmp_path / "devconfig.json").touch()
+        (tmp_path / "devconfig.toml").touch()
         nested = tmp_path / "app" / "src"
         nested.mkdir(parents=True)
 
@@ -98,20 +110,27 @@ class TestFindRoot:
 
     def test_finds_root_when_git_is_a_file(self, tmp_path: Path) -> None:
         (tmp_path / ".git").write_text("gitdir: /somewhere/else\n")
-        (tmp_path / "devconfig.json").touch()
+        (tmp_path / "devconfig.toml").touch()
 
         assert find_root(tmp_path) == tmp_path
 
-    def test_git_without_devconfig_json_raises(self, tmp_path: Path) -> None:
+    def test_git_without_devconfig_toml_raises(self, tmp_path: Path) -> None:
         (tmp_path / ".git").mkdir()
 
-        with pytest.raises(AssertionError, match="no devconfig.json"):
+        with pytest.raises(AssertionError, match="no devconfig.toml"):
             find_root(tmp_path)
 
-    def test_devconfig_json_without_git_raises(self, tmp_path: Path) -> None:
-        (tmp_path / "devconfig.json").touch()
+    def test_devconfig_toml_without_git_raises(self, tmp_path: Path) -> None:
+        (tmp_path / "devconfig.toml").touch()
 
         with pytest.raises(AssertionError, match="no .git"):
+            find_root(tmp_path)
+
+    def test_legacy_devconfig_json_raises(self, tmp_path: Path) -> None:
+        (tmp_path / ".git").mkdir()
+        (tmp_path / "devconfig.json").touch()
+
+        with pytest.raises(AssertionError, match="convert it to devconfig.toml"):
             find_root(tmp_path)
 
     def test_no_markers_raises(self, tmp_path: Path) -> None:
@@ -120,12 +139,12 @@ class TestFindRoot:
 
     def test_stops_at_nearest_marker(self, tmp_path: Path) -> None:
         (tmp_path / ".git").mkdir()
-        (tmp_path / "devconfig.json").touch()
+        (tmp_path / "devconfig.toml").touch()
         inner = tmp_path / "vendored"
         inner.mkdir()
         (inner / ".git").mkdir()
 
-        with pytest.raises(AssertionError, match="no devconfig.json"):
+        with pytest.raises(AssertionError, match="no devconfig.toml"):
             find_root(inner)
 
 
@@ -264,11 +283,22 @@ class TestInitPorts:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         container = tmp_path / "awesome.worktree"
-        module: dict[str, object] = {
-            "name": "awesome-was",
-            "services": [{"name": "api", "type": "flask"}],
-            "docker-compose": {"services": [{"name": "db", "type": "postgresql"}]},
-        }
+        module = ModuleFixture(
+            name="awesome-was",
+            compose=True,
+            toml="""\
+[[modules]]
+name = "awesome-was"
+
+[[modules.services]]
+name = "api"
+type = "flask"
+
+[[modules.docker-compose.services]]
+name = "db"
+type = "postgresql"
+""",
+        )
         root = _make_worktree(container, "main", [module])
         monkeypatch.chdir(root)
 
@@ -299,7 +329,14 @@ class TestInitPorts:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         container = tmp_path / "awesome.worktree"
-        root = _make_worktree(container, "main", [{"name": "awesome-app"}])
+        module = ModuleFixture(
+            name="awesome-app",
+            toml="""\
+[[modules]]
+name = "awesome-app"
+""",
+        )
+        root = _make_worktree(container, "main", [module])
         monkeypatch.chdir(root)
 
         result = runner.invoke(app, ["init"])
@@ -311,11 +348,22 @@ class TestInitPorts:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, allowed: list[Path]
     ) -> None:
         container = tmp_path / "awesome.worktree"
-        module: dict[str, object] = {
-            "name": "awesome-was",
-            "services": [{"name": "db", "type": "web"}],
-            "docker-compose": {"services": [{"name": "db", "type": "postgresql"}]},
-        }
+        module = ModuleFixture(
+            name="awesome-was",
+            compose=True,
+            toml="""\
+[[modules]]
+name = "awesome-was"
+
+[[modules.services]]
+name = "db"
+type = "web"
+
+[[modules.docker-compose.services]]
+name = "db"
+type = "postgresql"
+""",
+        )
         root = _make_worktree(container, "main", [module])
         monkeypatch.chdir(root)
 
@@ -416,10 +464,17 @@ class TestCompose:
         assert override.read_text() == first
 
 
-ADMIN_MODULE: dict[str, object] = {
-    "name": "awesome-admin",
-    "services": [{"name": "vite", "type": "vite"}],
-}
+ADMIN_MODULE = ModuleFixture(
+    name="awesome-admin",
+    toml="""\
+[[modules]]
+name = "awesome-admin"
+
+[[modules.services]]
+name = "vite"
+type = "vite"
+""",
+)
 
 
 class TestVite:
@@ -515,13 +570,21 @@ class TestVite:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, allowed: list[Path]
     ) -> None:
         container = tmp_path / "awesome.worktree"
-        module: dict[str, object] = {
-            "name": "awesome-admin",
-            "services": [
-                {"name": "vite", "type": "vite"},
-                {"name": "storybook", "type": "vite"},
-            ],
-        }
+        module = ModuleFixture(
+            name="awesome-admin",
+            toml="""\
+[[modules]]
+name = "awesome-admin"
+
+[[modules.services]]
+name = "vite"
+type = "vite"
+
+[[modules.services]]
+name = "storybook"
+type = "vite"
+""",
+        )
         root = _make_worktree(container, "main", [module])
         monkeypatch.chdir(root)
 
