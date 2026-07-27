@@ -265,11 +265,23 @@ def _write_vite_sh(
     lines = [
         VITE_SH_SHEBANG,
         GENERATED_MARKER,
+        *(
+            f'export {key}="{_shell_value(value)}"'
+            for key, value in sorted(values.items())
+        ),
         f'exec pnpm exec vite --port={port} --host="0.0.0.0" "$@"',
     ]
     vite_sh.write_text("\n".join(lines) + "\n")
     vite_sh.chmod(0o755)
     typer.echo(f"{vite_sh}: wrote launch script, port {port}")
+
+
+def _shell_value(value: int | bool | str) -> str:
+    # bool before the str() fallback: bool is an int subclass, and the shell
+    # convention is lowercase true/false, not Python's True/False.
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
 
 
 def _jar_path() -> Path:

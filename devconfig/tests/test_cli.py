@@ -493,12 +493,30 @@ class TestVite:
             [
                 "#!/bin/sh",
                 "# devconfig",
+                'export AWESOME_PROJECT_AWESOME_ADMIN_VITE_PORT="30000"',
                 'exec pnpm exec vite --port=30000 --host="0.0.0.0" "$@"',
                 "",
             ]
         )
         assert vite_sh.read_text() == expected
         assert os.access(vite_sh, os.X_OK)
+
+    def test_exports_variables_of_other_modules(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        container = tmp_path / "awesome.worktree"
+        root = _make_worktree(container, "main", [WAS_MODULE, ADMIN_MODULE])
+        monkeypatch.chdir(root)
+
+        result = runner.invoke(app, ["init"])
+
+        assert result.exit_code == 0, result.output
+        vite_sh = root / "awesome-admin" / "vite.sh"
+        content = vite_sh.read_text()
+        assert 'export AWESOME_PROJECT_AWESOME_WAS_API_PORT="30000"\n' in content
+        assert 'export AWESOME_PROJECT_AWESOME_WAS_DB_PORT="30001"\n' in content
+        assert 'export AWESOME_PROJECT_AWESOME_ADMIN_VITE_PORT="30002"\n' in content
+        assert content.endswith('--port=30002 --host="0.0.0.0" "$@"\n')
 
     def test_not_git_ignored_aborts_before_writing(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, allowed: list[Path]
